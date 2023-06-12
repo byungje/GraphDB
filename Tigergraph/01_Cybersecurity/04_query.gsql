@@ -1,0 +1,216 @@
+USE GRAPH Cybersecurity_IT
+
+CREATE QUERY FootprintingDetection(datetime start_date = to_datetime("2019-05-01 11:10:00"), datetime end_date = to_datetime("2019-05-01 11:15:00")) FOR GRAPH Cybersecurity_IT SYNTAX V2 { 
+	
+	// this query detects user id that calls many endpoints of a service in short period of time in order to find its vulnerability
+	// [user id] -> [request events] -> [service]
+	
+	TypeDef tuple<vertex user, vertex service, int cnt, float mean, float std> result_tuple;
+	AvgAccum @mean;
+	SumAccum<float> @std;
+	MapAccum<vertex,SetAccum<string>> @apiMap;
+	ListAccum<result_tuple> @@result_list;
+  
+  events = {Event.*};
+	
+	events = select s from events:s 
+           where s.Start_Date > start_date and s.Start_Date < end_date
+	           and s.Event_Type == "request";
+	
+	events = select event from events:event-(User_Event)-:user
+	         accum event.@apiMap += (user -> event.Endpoint);
+	
+	services = select s from events:event-(To_Service)-:s
+	           accum s.@apiMap += event.@apiMap
+	           post-accum
+	              case when s.@apiMap.size() > 1 then
+	               // calculate the mean
+	               foreach (user,cnt) in s.@apiMap do
+	                 s.@mean += cnt.size()
+	               end,
+	               // calculate the standard deviation
+	               foreach (user,cnt) in s.@apiMap do
+	                 s.@std += pow(cnt.size() - s.@mean, 2)
+	               end,
+	               s.@std = sqrt(s.@std/(s.@apiMap.size()-1)),
+	               case when s.@std != 0 then
+	                 // calculate the out lier
+	                 foreach (user,cnt) in s.@apiMap do
+	                   case when cnt.size()-s.@mean > 3*s.@std then
+	                     @@result_list += result_tuple(user,s,cnt.size(),s.@mean,s.@std)
+	                   end
+	                 end
+	               end
+	             end;
+	
+	print @@result_list;
+	print services;
+}
+CREATE QUERY AlertSourceTracking(int days=7, int k=3) FOR GRAPH Cybersecurity_IT SYNTAX V2 { 
+  
+	// start from the corrputed file alert, find all the user names that output to the 
+	// corresponding resource within input period of time before the reading action.
+	// Then start from the user names search for the login IP addresses
+	// [alert] -> [resource] -> [write event] -> [user name] -> [login event] -> [IP]
+	
+	MaxAccum<datetime> @alert_date, @read_date; // the most recent dates
+	SumAccum<int> @count;
+	SetAccum<vertex> @@alert_type;
+	ListAccum<edge> @path;
+	
+	@@alert_type += to_vertex("Data Corrupted", "Alert_Type");
+	
+	start = {@@alert_type};
+	
+	file_corrupted_alerts = select alert from start-(Alert_Has_Type:e)-:alert
+	                        accum alert.@path += e;
+	
+	service = select serv from file_corrupted_alerts:alert-(Service_Alert:e)-:serv
+	          accum serv.@alert_date += alert.Alert_Date, serv.@path += alert.@path, serv.@path += e;
+	
+	read_events = select event from service:s-(From_Service:e)-:event
+	              // the read date is within one day before the alert
+	              where datetime_diff(s.@alert_date,event.Start_Date) between 0 and 3600*24*days
+	              and event.Event_Type == "read"
+	              accum event.@path += s.@path, event.@path += e;
+	
+	resource = select res from read_events:s-(Read_From_Resource:e)-:res
+	            // keep the most recent read date of the resource
+	            accum res.@read_date += s.Start_Date, res.@path += s.@path, res.@path += e; 
+	
+	write_events = select event from resource:s-(Output_To_Resource:e)-:event
+	               // the write date is within one day before the read
+	               where datetime_diff(s.@read_date,event.Start_Date) between 0 and 3600*24*days
+	                 and event.Event_Type == "write"
+	               accum event.@path += s.@path, event.@path += e;
+	
+	// get the users who behaved the file writing operation
+	users = select user from write_events:s-(User_Event:e)-:user
+	          accum user.@count += 1, user.@path += s.@path, user.@path += e;
+	
+	login_events = select event from users:s-(User_Event:e)-:event
+	               where event.Event_Type == "login"
+	               accum event.@count += s.@count, event.@path += s.@path, event.@path += e;
+	
+	login_IP = select ip from login_events:s-(Has_IP:e)-:ip
+	           accum ip.@count += s.@count, ip.@path += s.@path, ip.@path += e
+	           order by ip.@count desc
+	           limit k;
+	
+	print login_IP [login_IP.@count, login_IP.@path];
+}
+CREATE QUERY FloodingDetection(/* Parameters here */) FOR GRAPH Cybersecurity_IT { 
+  
+  // this query detects the addresses that flooded one service with large number of requests.
+  // and possibly the ip addresses have logged in to many accounts 
+  // [IP] -> [login event] -> [user id] -> [request event] -> [service]
+  
+  TypeDef tuple<vertex entity, vertex service, int cnt, float mean, float std> result_tuple;
+  AvgAccum @mean;
+  SumAccum<float> @std;
+  MapAccum<vertex, SumAccum<int>> @countMap;
+  ListAccum<result_tuple> @@result_list;
+  
+  IPs = {IP.*};
+  
+  login_events = select event from IPs-(Has_IP)-:event
+                 where event.Event_Type == "login"
+                 accum event.@countMap += (IPs->1);
+  
+  users = select user from login_events-(User_Event)-:user
+          accum user.@countMap += login_events.@countMap;
+  
+  events = select event from users-(User_Event:e)-:event
+           where event.Event_Type == "request"
+           accum event.@countMap += users.@countMap;
+  
+  services = select s from events-(To_Service)-:s
+             accum s.@countMap += events.@countMap
+             post-accum
+               case when s.@countMap.size() > 1 then
+                 // calculate the mean
+                 foreach (user,cnt) in s.@countMap do
+                   s.@mean += cnt
+                 end,
+                 // calculate the standard deviation
+                 foreach (user,cnt) in s.@countMap do
+                   s.@std += pow(cnt - s.@mean, 2)
+                 end,
+                 s.@std = sqrt(s.@std/(s.@countMap.size()-1)),
+                 case when s.@std != 0 then
+                   // calculate the out lier
+                   foreach (user,cnt) in s.@countMap do
+                     case when cnt-s.@mean > 3*s.@std then
+                       @@result_list += result_tuple(user,s,cnt,s.@mean,s.@std)
+                     end
+                   end
+                 end
+               end;
+  
+  print @@result_list;
+  print services;
+}
+CREATE QUERY FirewallBypassDetection(/* Parameters here */) FOR GRAPH Cybersecurity_IT SYNTAX V2 { 
+  
+	// start from all resources that requires firewall check, 
+	// detect if any read events that are done without any firewall event prior to it.
+	// [resouce] -> [read event] -> [user id] -> [firewall event]
+	
+	ListAccum<datetime> @read_time, @firewall_time;
+	OrAccum @by_pass;
+	
+  resources = {Resource.*};
+	
+	resources = select res from resources:res 
+	            where res.Firewall_Required == true;
+	
+	events = select event from resources-(Read_From_Resource)-:event
+	         where event.Event_Type == "read";
+	
+  IP_userID = select t from events:s-((Has_IP|User_Event):e)-:t
+	            accum t.@read_time += s.Start_Date;
+	
+	IP_userID_firewall = select s from IP_userID:s-((Has_IP|User_Event):e)-:event
+	                     where event.Event_Type == "firewall"
+	                     accum s.@firewall_time += event.Start_Date;
+	
+	IP_userID_no_firewall = IP_userID minus IP_userID_firewall;
+	
+	print IP_userID_no_firewall;
+	
+	IP_userID_bypass_firewall = select s from IP_userID_firewall:s
+	                            where s.@read_time.size() > s.@firewall_time.size();
+	
+	print IP_userID_bypass_firewall;
+}
+CREATE QUERY SuspiciousIPDetection(vertex<IP> inputIP, int k) FOR GRAPH Cybersecurity_IT SYNTAX V2 { 
+  
+	// this query does feature extraction for malicious IP prediction.
+	// the feature is number of shortest paths to banned ips.
+	// input parameter, inputIP: 188.117.3.237 k: any integer number from 4 to 7
+	
+	ListAccum<edge> @edges;
+	SumAccum<int> @@shortest_path_to_banned_ip, @number_of_path;
+	SetAccum<vertex> @@banned_IP_set;
+	
+	start (ANY) = {inputIP};
+	
+	start = select s from start:s post-accum s.@number_of_path = 1;
+	
+	while start.size() > 0 limit k do
+	  start = select t from start:s-(:e)-:t
+	          where t.@number_of_path == 0
+	          accum t.@number_of_path += s.@number_of_path,
+	                t.@edges += e, t.@edges += s.@edges
+	          post-accum case when t.banned == true then
+	                       @@shortest_path_to_banned_ip += t.@number_of_path,
+	                       @@banned_IP_set += t
+	                     end;
+	end;
+	
+	print @@shortest_path_to_banned_ip;
+	start = @@banned_IP_set;
+	print start;
+}
+set exit_on_error = "true"
+
