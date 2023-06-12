@@ -1,0 +1,19 @@
+create graph AMLSim()
+use graph AMLSim
+create schema_change job AMLSim_schema for graph AMLSim {
+
+	add VERTEX Country (PRIMARY_ID id STRING) WITH primary_id_as_attribute="true";
+	add VERTEX Customer (PRIMARY_ID id STRING) WITH primary_id_as_attribute="true";
+	add VERTEX Account (PRIMARY_ID id STRING, init_balance DOUBLE, account_type STRING, tx_behavior INT, pagerank FLOAT, label INT, current_balance DOUBLE, min_send_tx DOUBLE, min_recieve_tx DOUBLE, max_send_tx DOUBLE, max_recieve_tx DOUBLE, avg_send_tx DOUBLE, avg_recieve_tx DOUBLE, cnt_recieve_tx INT, cnt_send_tx INT) WITH primary_id_as_attribute="true";
+	add VERTEX Transaction (PRIMARY_ID id STRING, tx_behavior_id INT, amount DOUBLE, is_fraud BOOL) WITH primary_id_as_attribute="true";
+	add VERTEX Alert (PRIMARY_ID id STRING, alert_type STRING, ts INT) WITH primary_id_as_attribute="true";
+	add UNDIRECTED EDGE BASED_IN (From Customer, To Country);
+	add UNDIRECTED EDGE CUSTOMER_ACCOUNT (From Customer, To Account);
+	add UNDIRECTED EDGE TRANSACTION_FLAGGED (From Transaction, To Alert);
+	add DIRECTED EDGE SEND_TO (From Account, To Account) WITH REVERSE_EDGE="reverse_SEND_TO";
+	add DIRECTED EDGE SEND_TRANSACTION (From Account, To Transaction, ts INT, tx_type STRING) WITH REVERSE_EDGE="reverse_SEND_TRANSACTION";
+	add DIRECTED EDGE RECEIVE_TRANSACTION (From Transaction, To Account, ts INT, tx_type STRING) WITH REVERSE_EDGE="reverse_RECEIVE_TRANSACTION";
+	
+	}
+
+RUN SCHEMA_CHANGE JOB AMLSim_schema
