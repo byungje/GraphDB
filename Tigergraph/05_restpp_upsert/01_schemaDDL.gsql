@@ -1,0 +1,9 @@
+CREATE GRAPH Person_Movie()
+
+CREATE SCHEMA_CHANGE JOB change_schema_of_Person_Movie  FOR GRAPH Person_Movie {
+ 
+	add VERTEX Composite_Person(id UINT, name STRING, age UINT, primary key (name, id));
+	add VERTEX Composite_Movie (id UINT, title STRING, country STRING, year UINT, PRIMARY key (title,year,id));
+	add DIRECTED EDGE Composite_Roles (from Composite_Person,to Composite_Movie, role STRING);
+
+}
