@@ -1,0 +1,52 @@
+Create Graph Northwind()
+
+CREATE SCHEMA_CHANGE JOB change_schema_of_Northwind  FOR GRAPH Northwind {
+
+    ADD VERTEX Shipper(PRIMARY_ID id INT) WITH STATS="OUTDEGREE_BY_EDGETYPE", PRIMARY_ID_AS_ATTRIBUTE="true";
+    ADD VERTEX Employee(PRIMARY_ID id INT, lastName STRING, firstName STRING, birthDate DATETIME, hireDate DATETIME, photoPath STRING, salary FLOAT, notes STRING) WITH STATS="OUTDEGREE_BY_EDGETYPE", PRIMARY_ID_AS_ATTRIBUTE="true";
+    ADD VERTEX City(PRIMARY_ID id STRING) WITH STATS="OUTDEGREE_BY_EDGETYPE", PRIMARY_ID_AS_ATTRIBUTE="true";
+    ADD VERTEX Region(PRIMARY_ID id STRING, description STRING) WITH STATS="OUTDEGREE_BY_EDGETYPE", PRIMARY_ID_AS_ATTRIBUTE="true";
+    ADD VERTEX PostalCode(PRIMARY_ID id STRING) WITH STATS="OUTDEGREE_BY_EDGETYPE", PRIMARY_ID_AS_ATTRIBUTE="true";
+    ADD VERTEX Country(PRIMARY_ID id STRING) WITH STATS="OUTDEGREE_BY_EDGETYPE", PRIMARY_ID_AS_ATTRIBUTE="true";
+    ADD VERTEX Territory(PRIMARY_ID id STRING, description STRING) WITH STATS="OUTDEGREE_BY_EDGETYPE", PRIMARY_ID_AS_ATTRIBUTE="true";
+    ADD VERTEX CustomerOrder(PRIMARY_ID id INT, orderDate DATETIME, requiredDate DATETIME, shippedDate DATETIME, shipVia INT, freight STRING, shipName STRING) WITH STATS="OUTDEGREE_BY_EDGETYPE", PRIMARY_ID_AS_ATTRIBUTE="true";
+    ADD VERTEX Address(PRIMARY_ID id STRING) WITH STATS="OUTDEGREE_BY_EDGETYPE", PRIMARY_ID_AS_ATTRIBUTE="true";
+    ADD VERTEX Title(PRIMARY_ID id STRING) WITH STATS="OUTDEGREE_BY_EDGETYPE", PRIMARY_ID_AS_ATTRIBUTE="true";
+    ADD VERTEX TitleOfCourtesy(PRIMARY_ID id STRING) WITH STATS="OUTDEGREE_BY_EDGETYPE", PRIMARY_ID_AS_ATTRIBUTE="true";
+    ADD VERTEX Customer(PRIMARY_ID id STRING, contactName STRING, contactTitle STRING) WITH STATS="OUTDEGREE_BY_EDGETYPE", PRIMARY_ID_AS_ATTRIBUTE="true";
+    ADD VERTEX Phone(PRIMARY_ID id STRING, extension STRING) WITH STATS="OUTDEGREE_BY_EDGETYPE", PRIMARY_ID_AS_ATTRIBUTE="true";
+    ADD VERTEX Fax(PRIMARY_ID id STRING) WITH STATS="OUTDEGREE_BY_EDGETYPE";
+    ADD VERTEX Product(PRIMARY_ID id INT, productName STRING, qtyPerUnit STRING, unitPrice FLOAT, inStock INT, onOrder INT, reorderLevel INT, discontinued BOOL) WITH STATS="OUTDEGREE_BY_EDGETYPE", PRIMARY_ID_AS_ATTRIBUTE="true";
+    ADD VERTEX Category(PRIMARY_ID id INT, name STRING, description STRING) WITH STATS="OUTDEGREE_BY_EDGETYPE", PRIMARY_ID_AS_ATTRIBUTE="true";
+    ADD VERTEX Company(PRIMARY_ID id STRING) WITH STATS="OUTDEGREE_BY_EDGETYPE", PRIMARY_ID_AS_ATTRIBUTE="true";
+    ADD VERTEX CustomerType(PRIMARY_ID id STRING, customerDescription STRING) WITH STATS="OUTDEGREE_BY_EDGETYPE", PRIMARY_ID_AS_ATTRIBUTE="true";
+    ADD VERTEX Supplier(PRIMARY_ID id INT, contactName STRING, contactTitle STRING, homePage STRING) WITH STATS="OUTDEGREE_BY_EDGETYPE", PRIMARY_ID_AS_ATTRIBUTE="true";
+    ADD DIRECTED EDGE reports_to(FROM Employee, TO Employee) WITH REVERSE_EDGE="reverse_reports_to";
+    ADD UNDIRECTED EDGE in_territory(FROM Employee, TO Territory);
+    ADD UNDIRECTED EDGE to_region(FROM CustomerOrder, TO Region);
+    ADD UNDIRECTED EDGE to_country(FROM CustomerOrder, TO Country);
+    ADD UNDIRECTED EDGE to_postal_code(FROM CustomerOrder, TO PostalCode);
+    ADD UNDIRECTED EDGE to_city(FROM CustomerOrder, TO City);
+    ADD UNDIRECTED EDGE to_address(FROM CustomerOrder, TO Address);
+    ADD UNDIRECTED EDGE has_title(FROM Employee, TO Title);
+    ADD UNDIRECTED EDGE has_toc(FROM Employee, TO TitleOfCourtesy);
+    ADD UNDIRECTED EDGE placed_order(FROM Customer, TO CustomerOrder, orderDate DATETIME);
+    ADD UNDIRECTED EDGE is_category(FROM Product, TO Category);
+    ADD UNDIRECTED EDGE contains_product(FROM CustomerOrder, TO Product, unitPrice FLOAT, quantity INT, discount DOUBLE);
+    ADD UNDIRECTED EDGE ship_via(FROM CustomerOrder, TO Shipper);
+    ADD UNDIRECTED EDGE is_type(FROM Customer, TO CustomerType);
+    ADD UNDIRECTED EDGE in_city(FROM Employee, TO City|FROM Customer, TO City|FROM Supplier, TO City);
+    ADD UNDIRECTED EDGE in_region(FROM Territory, TO Region|FROM Employee, TO Region|FROM Customer, TO Region|FROM Supplier, TO Region);
+    ADD UNDIRECTED EDGE in_postal_code(FROM Employee, TO PostalCode|FROM Customer, TO PostalCode|FROM Supplier, TO PostalCode);
+    ADD UNDIRECTED EDGE in_country(FROM Employee, TO Country|FROM Customer, TO Country|FROM Supplier, TO Country);
+    ADD UNDIRECTED EDGE at_address(FROM Employee, TO Address|FROM Customer, TO Address|FROM Supplier, TO Address);
+    ADD UNDIRECTED EDGE has_fax(FROM Customer, TO Fax|FROM Supplier, TO Fax);
+    ADD UNDIRECTED EDGE has_phone(FROM Employee, TO Phone|FROM Customer, TO Phone|FROM Shipper, TO Phone|FROM Supplier, TO Phone);
+    ADD UNDIRECTED EDGE from_company(FROM Shipper, TO Company|FROM Supplier, TO Company);
+    ADD UNDIRECTED EDGE from_supplier(FROM Product, TO Supplier);
+    ADD UNDIRECTED EDGE facilitated_order(FROM CustomerOrder, TO Employee);
+
+}
+
+run schema_change job change_schema_of_Northwind
+drop job change_schema_of_Northwind
