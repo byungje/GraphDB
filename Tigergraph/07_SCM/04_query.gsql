@@ -1,0 +1,306 @@
+USE GRAPH SCM
+
+create query price_prediction(set<string> input, int maxIteration, bool doUpdate) for graph SCM syntax v2
+{
+  /* 
+   With a set of string as input, in the format of PRODUCT_NAME,NEW_PRICE, recalculate the new price for the connected BOM subgraph.
+
+   This algorithm includes two phases:
+    1) traverse down to the raw materials and mark the topology order (maximum depth) for each vertex
+    2) traverse down to the raw materials again and calculate the new prices based on the topology order
+
+   Sampe input
+    input:STEEL RODS,0.2
+    maxIteration: 10
+    doUpdate:false
+  */
+
+  SumAccum<int> @@depth = 0;
+  MaxAccum<int> @max_Depth = 0;
+  OrAccum @visited_1 = false;
+
+  OrAccum @is_Start = false;
+
+  MapAccum<string,float> @@result;
+  MapAccum<string,float> @mapping;
+  MapAccum<string,int>   @amount_Map;
+  OrAccum @visited = false;
+  SumAccum<float> @new_price;
+
+  MapAccum<vertex,double> @@input_Map;
+  SetAccum<vertex> @@start_Set;
+
+  SetAccum<edge> @@display_Set;
+  SetAccum<vertex> @@display_V;
+
+  String input_key = "";
+  String input_val = "";
+
+  // parse the input strings and put them in to a vertex set
+  foreach str in input do
+    GetKeyVal(str, input_key, input_val);
+    @@input_Map += (to_vertex(input_key, "product") -> str_to_double(input_val));
+    @@start_Set += to_vertex(input_key, "product");
+  end;
+
+  // traverse from the input vertexe set 
+  Start = {@@start_Set};
+
+  Start1 = select s from Start:s
+          accum s.@is_Start = true,
+                s.@visited_1 = true,
+                s.@visited = true,
+                s.@new_price = @@input_Map.get(s)
+          post-accum s.price = @@input_Map.get(s)
+  ;
+
+  @@depth = 1;
+
+
+  // traverse down to the raw materials, each vertex will only serve as start
+  // vertex for once, and mark them with their maximum depth value
+  while (Start1.size() > 0) limit maxIteration do
+    Start1 = select u
+        from Start1:o-(usedBy>)- product:u
+        post-accum 
+            // when start product is on the path of other start product
+            case when u.@is_Start == true then
+                u.@max_Depth += @@depth
+            end,
+            // if first time visit just pass the depth along
+            case when u.@visited_1 == false then
+                u.@visited_1 = true
+            // keep the largest depth
+            else 
+                u.@max_Depth += @@depth
+            end
+        having u.@max_Depth == 0;
+        @@depth += 1;
+  end;
+
+  // start from the input vertex set again
+  Start2 = select s from Start:s
+          where s.@max_Depth == 0;
+
+  // reset the depth
+  @@depth = 1;
+
+  // traverse down to the raw materials again, each vertex will wait
+  // until the iteration equals to its maximum depth value stored on it 
+  // to calculate its new price
+  while (Start2.size() > 0) limit maxIteration do
+    
+    print @@depth;
+
+    // search first
+    Start2 = select u
+      from Start2:o -(usedBy>)- product:u
+      where (u.@max_Depth == 0 or u.@max_Depth <= @@depth) and u.@visited == false ;
+
+    // then do the calculation
+    Start2 = select o
+      from Start2:o -(reverseUsedBy>:e)- product:u
+      accum case 
+          when u.@visited == true then  
+              o.@mapping += (e.formula_order->u.@new_price)
+          else 
+              o.@mapping += (e.formula_order->u.price)
+          end
+          ,o.@amount_Map += (e.formula_order->e.useAmount)
+          ,@@display_Set += e
+          ,@@display_V += u
+      post-accum
+            // dynamically evaluate the formula string stored as an attribute
+            string formula = o.formula,
+            foreach (key,val) in o.@mapping do
+              // replace the $1 string with the runtime value
+              formula = replaceStr(formula,"$"+key,to_string(val*o.@amount_Map.get(key)))
+            end,
+            o.@new_price = evaluate(formula,"double"),
+
+            log(true,o.@new_price, formula, o.formula, o.name, o.@mapping),
+
+            case when doUpdate == true then
+              o.price = o.@new_price
+            end,
+            o.@visited =true
+    ;
+
+    @@depth += 1;
+  end;
+
+  print @@display_Set;
+
+  final = {@@display_V};
+
+  print final;
+}
+create query check_stocking (vertex<product> input, uint amount) for graph SCM syntax v2
+{
+  /*
+  Given a product and ordering amount, calculate the needed amount for all the 
+  raw materials, also the query calculates the current in stock raw material amount
+  by checking the ordering and stocking records in the history. In the end, the query 
+  output the BOM subgraph and show the calculated values on the leaf nodes 
+
+  Sample input
+  input:CAR WHEEL SET
+  amount:5
+  */
+  SumAccum<int> @consumed_Amount;
+  SumAccum<int> @needed_Amount;
+  SumAccum<int> @instock_Amount;
+
+  OrAccum @has_Enough_Of_Material;
+
+  SetAccum<edge> @@display_Set;
+
+  // Start from all order hisotry vertexes
+  Start (ANY) = {p_order.*};
+
+  // calcuate ordered amount for the finished products
+  Start = select t
+          from Start:s-(prodOrder:e)-:t
+          accum t.@consumed_Amount += e.amount;
+
+  // traverse down to the raw materials, calculate the amount of raw materials has been comsumed
+  while (Start.size() > 0) do
+    Start = select t
+            from Start:s-(reverseUsedBy>:e)-:t
+            accum 
+                t.@consumed_Amount += s.@consumed_Amount*e.useAmount
+            post-accum
+                // if there is stocking record in the history calculate its in stock amount
+                case when t.outdegree("prodStocking") > 0 then
+                  t.@instock_Amount = SUM(t.edgeattribute("prodStocking","amount")) - t.@consumed_Amount 
+                end
+    ;
+  end;
+
+  // start from the input product
+  Start = {input};
+  Start = select s
+          from Start:s
+          accum
+              s.@needed_Amount = amount
+  ;
+
+  print Start;
+
+  // again from the input product traverse down to the raw material, and see 
+  // if is there enough raw material in stock
+  // @hasEnoughOfMaterial will be true when there is enough
+  while (Start.size() > 0) do
+    Start = select t
+            from Start:s-(reverseUsedBy>:e)-:t
+            accum
+                t.@needed_Amount += s.@needed_Amount*e.useAmount,
+                @@display_Set += e
+            post-accum
+                case when t.@instock_Amount != 0 then
+                    case when t.@instock_Amount > (t.@needed_Amount) then
+                      t.@has_Enough_Of_Material += true
+                    end
+                end
+    ;
+
+    print Start;
+  end;
+
+  print @@display_Set;
+}
+create query impact_analysis(set<vertex<site>> affectedSites, uint maxDepth) for graph SCM syntax v2
+{
+  /*
+    Start from multiple input affected sites, return the impacted site-product pairs. The impacted site-product pairs will be indentified from two paths, one is site-(delivery)-site relationship. Another one is site-(produce)-product-(use)-product relationship. Since not nessesarily all product belongs to a site is getting impacted. To calculte the subset we need infomation from both paths. That is the impacted product needs to use another impacted product delivered from a impacted site. This will require both delivery relationship and dependency relationship between products. Because a delivered product may not be used, a impacted product being used may not delivered from the very impacted site.
+
+    Sample input:
+    affectedSites: site5
+    maxDepth: 10
+  */
+  
+   typedef tuple<string siteName, string  prodName> spPair;
+
+   SetAccum<spPair> @pair_Set;
+
+   // products a site that has been affected
+   SetAccum<string> @affected_Prod;
+
+   // number of iteration
+   SumAccum<int> @@iteration = 0;
+
+   // storing the result for unfinished goods
+   SetAccum<edge> @@result_Set;
+
+   // for pass along the edge info for visualization
+   SetAccum<edge> @edge_Msg_Set;
+
+   effectedSite = {affectedSites};
+
+   while (effectedSite.size() > 0) limit maxDepth do
+   
+     // get the impacted products from the impacted sites
+     effectedProduct = select p
+                       from effectedSite:s -(produce>:e)- product:p
+                       where @@iteration == 0 or s.@affected_Prod.contains(p.name) == true
+                       accum p.@pair_Set += spPair(s.name, p.name)
+                             // we assume all of the products got impacted from the input sites
+                             ,case when @@iteration == 0 then
+                                 s.@affected_Prod += p.name
+                                 ,@@result_Set += e
+                             end
+     ;
+
+     // from the impacted products get its downsteam products
+     downStreamProd = select p
+                      from effectedProduct:ep -(usedBy>:e) - product:p
+                      accum p.@pair_Set += ep.@pair_Set
+                            ,p.@edge_Msg_Set += e
+     ;
+
+     // find the impacted sites from the previous effectedSite set 
+     effectedSite = select st
+                    from effectedSite:s -(deliver>:e) - site:st
+                    accum 
+                      case when s.@affected_Prod.contains(e.itemId) then
+                        st.@pair_Set += spPair(s.name,e.itemId)
+                        ,st.@edge_Msg_Set += e
+                      end
+     ;
+
+     // keep the impacted sites that are has deliveted imapcted product that is delivered
+     // from a upstream site, and they also use this produt in producting their product
+     effectedSite = select st
+                        from effectedSite:st -(produce>:e) - product:p
+                        where COUNT(st.@pair_Set INTERSECT p.@pair_Set) > 0
+                        accum 
+                            st.@affected_Prod += p.name
+                            ,@@result_Set += e 
+                            ,@@result_Set += st.@edge_Msg_Set
+                            ,@@result_Set += p.@edge_Msg_Set
+                        post-accum
+                            p.@pair_Set.clear()
+     ;
+
+     @@iteration += 1;
+  end;
+
+  print @@result_Set;
+}
+
+create query show_whole_graph () for graph SCM syntax v2
+{
+  // print all vertexes and edges
+  SetAccum<edge> @@display_Set;
+
+  Start = {ANY};
+
+  print Start;
+
+  Start = select s 
+          from Start:s-((prodOrder|prodStocking|usedBy>|produce>|deliver>):e)-:t
+          accum @@display_Set += e;
+
+  print @@display_Set;  
+}
+set exit_on_error = "true"
