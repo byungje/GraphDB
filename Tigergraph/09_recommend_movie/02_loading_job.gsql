@@ -1,0 +1,12 @@
+USE GRAPH recommend_movie
+
+CREATE LOADING JOB moviesJob FOR GRAPH recommend_movie {
+      DEFINE FILENAME v_movies;
+      LOAD v_movies TO VERTEX movie VALUES($0, $1, $2) USING SEPARATOR=",", HEADER="true", EOL="\n", QUOTE="double";
+    }
+
+CREATE LOADING JOB ratingsJob FOR GRAPH recommend_movie {
+      DEFINE FILENAME v_ratings;
+      LOAD v_ratings TO EDGE rate VALUES($0, $1, $2, $3) USING SEPARATOR=",", HEADER="true", EOL="\n";
+    }
+
